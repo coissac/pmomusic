@@ -25,7 +25,7 @@ use pmocovers::{
     new_cache_with_consolidation as new_cover_cache, register_cover_cache, Cache as CoverCache,
 };
 use pmoparadise::{
-    channels::{ChannelDescriptor, ALL_CHANNELS},
+    channels::{channels, resolve_channel, ChannelDescriptor},
     ParadiseHistoryBuilder, ParadiseStreamChannel, ParadiseStreamChannelConfig,
 };
 use pmoplaylist::register_audio_cache as register_playlist_audio_cache;
@@ -90,7 +90,7 @@ async fn main() -> anyhow::Result<()> {
 
     let channel = Arc::new(
         ParadiseStreamChannel::new(
-            descriptor,
+            descriptor.clone(),
             channel_config,
             Some(cover_cache.clone()),
             Some(history_opts),
@@ -227,15 +227,8 @@ async fn get_cover(
 
 fn pick_descriptor(arg: Option<String>) -> anyhow::Result<ChannelDescriptor> {
     if let Some(token) = arg {
-        if let Some(desc) = ALL_CHANNELS.iter().find(|c| c.slug == token) {
-            return Ok(*desc);
-        }
-        if let Ok(id) = token.parse::<u8>() {
-            if let Some(desc) = ALL_CHANNELS.iter().find(|c| c.id == id) {
-                return Ok(*desc);
-            }
-        }
-        anyhow::bail!("Unknown channel identifier: {token}");
+        return resolve_channel(&token)
+            .ok_or_else(|| anyhow::anyhow!("Unknown channel identifier: {token}"));
     }
-    Ok(ALL_CHANNELS[0])
+    Ok(channels()[0].clone())
 }

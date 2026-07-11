@@ -16,7 +16,7 @@ use std::{
 };
 
 use crate::{
-    channels::{ChannelDescriptor, ParadiseChannelKind, ALL_CHANNELS},
+    channels::{channels, refresh_channels, ChannelDescriptor},
     client::RadioParadiseClient,
     models::{Block, EventId},
     playlist_feeder::RadioParadisePlaylistFeeder,
@@ -133,13 +133,13 @@ impl Default for ParadiseHistoryBuilder {
 
 #[cfg(feature = "pmoconfig")]
 impl ParadiseStreamChannelConfig {
-    pub fn from_config(cfg: &pmoconfig::Config, channel: ParadiseChannelKind) -> Self {
+    pub fn from_config(cfg: &pmoconfig::Config, channel_slug: &str) -> Self {
         use serde_yaml::Value;
         let path = [
             "sources",
             "radio_paradise",
             "channels",
-            channel.slug(),
+            channel_slug,
             "max_lead_seconds",
         ];
         match cfg.get_value(&path) {
@@ -303,10 +303,10 @@ impl ParadiseStreamChannel {
         // 6. Lancer le pipeline audio
         let stop_token = CancellationToken::new();
         let pipeline_stop = stop_token.clone();
-        let channel_display_name = descriptor.display_name;
+        let channel_display_name = descriptor.display_name.clone();
 
         let state = Arc::new(ChannelState {
-            descriptor,
+            descriptor: descriptor.clone(),
             config,
             client,
             feeder: feeder.clone(),
@@ -401,7 +401,7 @@ impl ParadiseStreamChannel {
     }
 
     pub fn descriptor(&self) -> ChannelDescriptor {
-        self.descriptor
+        self.descriptor.clone()
     }
 
     /// Lance un pipeline dédié pour rejouer l'historique (FLAC pur) pour un client.
@@ -888,11 +888,11 @@ impl Drop for HistoryOggStream {
 
 /// Gestionnaire multi-canaux.
 pub struct ParadiseChannelManager {
-    channels: HashMap<u8, Arc<ParadiseStreamChannel>>,
+    channels: HashMap<u16, Arc<ParadiseStreamChannel>>,
 }
 
 impl ParadiseChannelManager {
-    pub fn new(channels: HashMap<u8, Arc<ParadiseStreamChannel>>) -> Self {
+    pub fn new(channels: HashMap<u16, Arc<ParadiseStreamChannel>>) -> Self {
         Self { channels }
     }
 
@@ -901,13 +901,32 @@ impl ParadiseChannelManager {
         history_builder: Option<ParadiseHistoryBuilder>,
         server_base_url: Option<String>,
     ) -> Result<Self> {
+        // Rafraîchir la liste des canaux depuis l'API avant d'initialiser les
+        // pipelines (fallback sur le registre courant en cas d'échec réseau)
+        match RadioParadiseClient::new().await {
+            Ok(client) => {
+                if let Err(e) = refresh_channels(&client).await {
+                    tracing::warn!(
+                        "Failed to refresh Radio Paradise channel list, using current registry: {}",
+                        e
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to create Radio Paradise client for channel discovery: {}",
+                    e
+                );
+            }
+        }
+        let channel_list = channels();
         tracing::info!(
             "➡️ Entering with_defaults_with_cover_cache ({} channels, base_url={:?})",
-            ALL_CHANNELS.len(),
+            channel_list.len(),
             server_base_url
         );
         let mut map = HashMap::new();
-        for descriptor in ALL_CHANNELS.iter().copied() {
+        for descriptor in channel_list.iter().cloned() {
             let mut config = ParadiseStreamChannelConfig::default();
             config.server_base_url = server_base_url.clone();
 
@@ -940,7 +959,12 @@ impl ParadiseChannelManager {
             );
             let channel = match tokio::time::timeout(
                 Duration::from_secs(20),
-                ParadiseStreamChannel::new(descriptor, config, cover_cache.clone(), history_opts),
+                ParadiseStreamChannel::new(
+                    descriptor.clone(),
+                    config,
+                    cover_cache.clone(),
+                    history_opts,
+                ),
             )
             .await
             {
@@ -980,7 +1004,7 @@ impl ParadiseChannelManager {
         Self::with_defaults_with_cover_cache(None, None, None).await
     }
 
-    pub fn get(&self, id: u8) -> Option<Arc<ParadiseStreamChannel>> {
+    pub fn get(&self, id: u16) -> Option<Arc<ParadiseStreamChannel>> {
         self.channels.get(&id).cloned()
     }
 
@@ -988,7 +1012,7 @@ impl ParadiseChannelManager {
         self.channels.values()
     }
 
-    pub async fn prefetch_until_horizon(&self, channel_id: u8) -> Result<()> {
+    pub async fn prefetch_until_horizon(&self, channel_id: u16) -> Result<()> {
         let channel = self
             .get(channel_id)
             .ok_or_else(|| anyhow!("Unknown channel id {}", channel_id))?;

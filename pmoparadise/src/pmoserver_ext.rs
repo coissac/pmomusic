@@ -3,7 +3,7 @@
 //! Ce module fournit un trait d'extension pour ajouter facilement l'API Radio Paradise
 //! à un serveur pmoserver.
 
-use crate::channels::{max_channel_id, ChannelDescriptor, ALL_CHANNELS};
+use crate::channels::{channel_by_id, channels, refresh_channels, ChannelDescriptor};
 use crate::{Block, NowPlaying, RadioParadiseClient};
 use async_trait::async_trait;
 use axum::{
@@ -26,7 +26,7 @@ pub struct RadioParadiseState {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct ParadiseQuery {
-    channel: Option<u8>,
+    channel: Option<u16>,
 }
 
 impl RadioParadiseState {
@@ -34,6 +34,15 @@ impl RadioParadiseState {
         let client = RadioParadiseClient::new()
             .await
             .map_err(|e| anyhow::anyhow!("Failed to create RadioParadise client: {}", e))?;
+
+        // Mettre à jour le registre de canaux depuis l'API (fallback sur les
+        // canaux par défaut en cas d'échec réseau)
+        if let Err(e) = refresh_channels(&client).await {
+            tracing::warn!(
+                "Failed to refresh Radio Paradise channel list, using defaults: {}",
+                e
+            );
+        }
 
         Ok(Self {
             client: Arc::new(RwLock::new(client)),
@@ -52,7 +61,7 @@ impl RadioParadiseState {
         let mut client = base_client;
 
         if let Some(channel) = params.channel {
-            if channel > max_channel_id() {
+            if channel_by_id(channel).is_none() {
                 tracing::warn!("Invalid Radio Paradise channel requested: {}", channel);
                 return Err(StatusCode::BAD_REQUEST);
             }
@@ -66,20 +75,26 @@ impl RadioParadiseState {
 /// Information sur un canal Radio Paradise
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ChannelInfo {
-    /// ID du canal (0-3)
-    pub id: u8,
+    /// ID du canal (attention : IDs non contigus, ex. 0, 1, 2, 3, 5, 42, 945)
+    pub id: u16,
+    /// Slug du canal ("main", "mellow", "beyond", ...)
+    pub slug: String,
     /// Nom du canal
     pub name: String,
     /// Description
     pub description: String,
+    /// Route locale de l'image du canal (servie par le cache covers)
+    pub image: Option<String>,
 }
 
 impl From<&ChannelDescriptor> for ChannelInfo {
     fn from(descriptor: &ChannelDescriptor) -> Self {
         Self {
             id: descriptor.id,
-            name: descriptor.display_name.to_string(),
-            description: descriptor.description.to_string(),
+            slug: descriptor.slug.clone(),
+            name: descriptor.display_name.clone(),
+            description: descriptor.description.clone(),
+            image: descriptor.image.clone(),
         }
     }
 }
@@ -251,7 +266,7 @@ impl From<NowPlaying> for NowPlayingResponse {
     get,
     path = "/now-playing",
     params(
-        ("channel" = Option<u8>, Query, description = "Channel ID (0-3)")
+        ("channel" = Option<u16>, Query, description = "Channel ID (voir /channels)")
     ),
     responses(
         (status = 200, description = "Morceau en cours", body = NowPlayingResponse),
@@ -277,7 +292,7 @@ async fn get_now_playing(
     get,
     path = "/block/current",
     params(
-        ("channel" = Option<u8>, Query, description = "Channel ID (0-3)")
+        ("channel" = Option<u16>, Query, description = "Channel ID (voir /channels)")
     ),
     responses(
         (status = 200, description = "Block actuel", body = BlockResponse),
@@ -304,7 +319,7 @@ async fn get_current_block(
     path = "/block/{event_id}",
     params(
         ("event_id" = u64, Path, description = "Event ID du block"),
-        ("channel" = Option<u8>, Query, description = "Channel ID (0-3)")
+        ("channel" = Option<u16>, Query, description = "Channel ID (voir /channels)")
     ),
     responses(
         (status = 200, description = "Block demandé", body = BlockResponse),
@@ -340,8 +355,27 @@ async fn get_block_by_id(
     tag = "Radio Paradise"
 )]
 async fn get_channels() -> Json<Vec<ChannelInfo>> {
-    let channels: Vec<ChannelInfo> = ALL_CHANNELS.iter().map(Into::into).collect();
-    Json(channels)
+    let cover_cache = pmocovers::get_cover_cache();
+    let mut list = Vec::new();
+    for descriptor in channels().iter() {
+        let mut info: ChannelInfo = descriptor.into();
+        // Toutes les images transitent par le cache covers local : on expose
+        // la route du cache, jamais l'URL externe img.radioparadise.com
+        info.image = match (&descriptor.image, &cover_cache) {
+            (Some(url), Some(cache)) => {
+                match cache.add_from_url(url, Some("radioparadise-channels")).await {
+                    Ok(pk) => Some(pmocache::covers_route_for(&pk, None)),
+                    Err(e) => {
+                        tracing::warn!("Failed to cache channel image {}: {}", url, e);
+                        None
+                    }
+                }
+            }
+            _ => None,
+        };
+        list.push(info);
+    }
+    Json(list)
 }
 
 /// GET /block/{event_id}/song/{index} - Récupère un morceau spécifique d'un block
@@ -351,7 +385,7 @@ async fn get_channels() -> Json<Vec<ChannelInfo>> {
     params(
         ("event_id" = u64, Path, description = "Event ID du block"),
         ("index" = usize, Path, description = "Index du morceau (0-based)"),
-        ("channel" = Option<u8>, Query, description = "Channel ID (0-3)")
+        ("channel" = Option<u16>, Query, description = "Channel ID (voir /channels)")
     ),
     responses(
         (status = 200, description = "Morceau demandé", body = SongInfo),
@@ -404,7 +438,7 @@ async fn get_song_by_index(
     params(
         ("event_id" = u64, Path, description = "Event ID du block"),
         ("song_index" = usize, Path, description = "Index du morceau (0-based)"),
-        ("channel" = Option<u8>, Query, description = "Channel ID (0-3)")
+        ("channel" = Option<u16>, Query, description = "Channel ID (voir /channels)")
     ),
     responses(
         (status = 200, description = "URL de la pochette avec fallback automatique", body = CoverUrlResponse),
@@ -456,7 +490,7 @@ async fn get_cover_url(
     path = "/stream-url/{event_id}",
     params(
         ("event_id" = u64, Path, description = "Event ID du block (None pour le block actuel)"),
-        ("channel" = Option<u8>, Query, description = "Channel ID (0-3)")
+        ("channel" = Option<u16>, Query, description = "Channel ID (voir /channels)")
     ),
     responses(
         (status = 200, description = "URL de streaming", body = StreamUrlResponse),
@@ -500,17 +534,15 @@ Cette API permet d'accéder aux métadonnées et flux de Radio Paradise.
 ## Fonctionnalités
 
 - **Métadonnées en temps réel** : Récupération du morceau en cours et des blocks
-- **Multi-canaux** : Support des 4 canaux Radio Paradise (Main, Mellow, Rock, Eclectic)
+- **Multi-canaux** : Support de tous les canaux Radio Paradise (liste dynamique)
 - **Streaming FLAC** : Accès direct aux URLs de streaming haute qualité
 - **Pochettes d'albums** : URLs complètes des couvertures (petite et grande taille)
 - **Historique** : Accès aux blocks passés via event_id
 
 ## Canaux disponibles
 
-- **0: Main Mix** - Eclectic mix of rock, world, electronica, and more
-- **1: Mellow Mix** - Mellower, less aggressive music
-- **2: Rock Mix** - Heavier, more guitar-driven music
-- **3: Eclectic Mix** - Curated worldwide selection
+La liste des canaux est récupérée dynamiquement depuis l'API Radio Paradise
+(`GET /channels`). Attention : les IDs ne sont pas contigus (ex. 0, 1, 2, 3, 5, 42, 945).
 
 ## Format des données
 

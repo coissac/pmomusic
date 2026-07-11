@@ -1,9 +1,10 @@
 //! RadioParadiseSource - Implementation of MusicSource for Radio Paradise
 //!
 //! This module provides a UPnP ContentDirectory source for Radio Paradise,
-//! exposing live streams and historical playlists for all 4 channels.
+//! exposing live streams and historical playlists for every channel known
+//! to the dynamic channel registry (see `crate::channels`).
 
-use crate::channels::{ChannelDescriptor, ALL_CHANNELS};
+use crate::channels::{channel_by_slug, channels, ChannelDescriptor};
 use pmosource::pmodidl::{Container, Item, Resource};
 use pmosource::{
     async_trait, AudioFormat, BrowseResult, MusicSource, MusicSourceError, Result,
@@ -27,7 +28,7 @@ const LIVE_PLAYLIST_READY_POLL: Duration = Duration::from_millis(200);
 /// RadioParadiseSource - UPnP ContentDirectory source for Radio Paradise
 ///
 /// Provides access to:
-/// - Live FLAC streams for all 4 channels (Main, Mellow, Rock, Eclectic)
+/// - Live FLAC streams for every channel in the registry (Main, Mellow, Rock, Eclectic, Beyond, ...)
 /// - Historical playlists (FIFO) for each channel
 ///
 /// # Object ID Schema
@@ -116,12 +117,12 @@ impl RadioParadiseSource {
         use pmoplaylist::PlaylistManager;
 
         // Préparer les IDs de playlists à surveiller (live + history pour chaque canal)
-        let ids: Vec<String> = ALL_CHANNELS
+        let ids: Vec<String> = channels()
             .iter()
             .flat_map(|ch| {
                 vec![
-                    Self::live_playlist_id(ch.slug),
-                    Self::history_playlist_id(ch.slug),
+                    Self::live_playlist_id(&ch.slug),
+                    Self::history_playlist_id(&ch.slug),
                 ]
             })
             .collect();
@@ -151,20 +152,21 @@ impl RadioParadiseSource {
                         tokio::spawn(async move {
                             strong.bump_update_counter().await;
                             // Notifier ContentDirectory des conteneurs concernés
+                            let known_channels = channels();
                             let containers: Vec<String> = if pid.contains("history") {
                                 // history playlist -> container history
-                                ALL_CHANNELS
+                                known_channels
                                     .iter()
-                                    .find(|ch| pid.ends_with(ch.slug))
+                                    .find(|ch| pid.ends_with(&ch.slug))
                                     .map(|ch| {
                                         vec![format!("radio-paradise:channel:{}:history", ch.slug)]
                                     })
                                     .unwrap_or_default()
                             } else {
                                 // live playlist -> container liveplaylist
-                                ALL_CHANNELS
+                                known_channels
                                     .iter()
-                                    .find(|ch| pid.ends_with(ch.slug))
+                                    .find(|ch| pid.ends_with(&ch.slug))
                                     .map(|ch| {
                                         vec![format!(
                                             "radio-paradise:channel:{}:liveplaylist",
@@ -192,6 +194,26 @@ impl RadioParadiseSource {
         format!("{}/api/sources/{}/image", self.base_url, self.id())
     }
 
+    /// Résout l'image d'un canal en URL locale servie par le cache covers.
+    ///
+    /// Toutes les images transitent par pmocovers : aucune URL externe ne doit
+    /// apparaître dans les métadonnées UPnP. En cas de cache indisponible ou
+    /// d'échec de téléchargement, fallback sur l'image par défaut de la source.
+    async fn channel_art_url(&self, descriptor: &ChannelDescriptor) -> String {
+        if let (Some(url), Some(cache)) = (descriptor.image.as_ref(), pmocovers::get_cover_cache())
+        {
+            match cache.add_from_url(url, Some("radioparadise-channels")).await {
+                Ok(pk) => {
+                    return format!("{}{}", self.base_url, pmocache::covers_route_for(&pk, None));
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to cache channel image {}: {}", url, e);
+                }
+            }
+        }
+        self.default_cover_url()
+    }
+
     /// Fetch current metadata from the live stream
     async fn fetch_live_metadata(&self, slug: &str) -> Result<Option<Item>> {
         let metadata_url = format!("{}/radioparadise/metadata/{}", self.base_url, slug);
@@ -212,11 +234,27 @@ impl RadioParadiseSource {
                         // Préférer l'URL de cache si cover_pk est fourni par le pipeline
                         let cover_pk = json["cover_pk"].as_str().map(|s| s.to_string());
                         // Stocker la route relative (le handler REST appliquera base_url.url_for())
-                        let cover_url = cover_pk
+                        let mut cover_url = cover_pk
                             .as_ref()
-                            .map(|pk| pmocache::covers_route_for(pk, None))
-                            .or_else(|| json["cover_url"].as_str().map(|s| s.to_string()))
-                            .or_else(|| Some(self.default_cover_url()));
+                            .map(|pk| pmocache::covers_route_for(pk, None));
+                        if cover_url.is_none() {
+                            // Pas de pk : faire transiter l'URL externe par le cache covers
+                            if let (Some(remote), Some(cache)) =
+                                (json["cover_url"].as_str(), pmocovers::get_cover_cache())
+                            {
+                                match cache.add_from_url(remote, Some("radioparadise")).await {
+                                    Ok(pk) => {
+                                        cover_url = Some(pmocache::covers_route_for(&pk, None))
+                                    }
+                                    Err(e) => tracing::warn!(
+                                        "Failed to cache live cover {}: {}",
+                                        remote,
+                                        e
+                                    ),
+                                }
+                            }
+                        }
+                        let cover_url = cover_url.or_else(|| Some(self.default_cover_url()));
 
                         // Parse duration from JSON (in seconds as a float)
                         let duration = json["duration"]
@@ -318,8 +356,8 @@ impl RadioParadiseSource {
     }
 
     /// Get channel descriptor by slug
-    fn get_channel_by_slug(slug: &str) -> Option<&'static ChannelDescriptor> {
-        ALL_CHANNELS.iter().find(|ch| ch.slug == slug)
+    fn get_channel_by_slug(slug: &str) -> Option<ChannelDescriptor> {
+        channel_by_slug(slug)
     }
 
     /// Parse an object ID into its components
@@ -356,7 +394,7 @@ impl RadioParadiseSource {
     }
 
     /// Build a channel container
-    fn build_channel_container(&self, descriptor: &ChannelDescriptor) -> Container {
+    async fn build_channel_container(&self, descriptor: &ChannelDescriptor) -> Container {
         Container {
             id: format!("radio-paradise:channel:{}", descriptor.slug),
             parent_id: "radio-paradise".to_string(),
@@ -366,14 +404,14 @@ impl RadioParadiseSource {
             title: descriptor.display_name.to_string(),
             class: "object.container".to_string(),
             artist: None,
-            album_art: None,
+            album_art: Some(self.channel_art_url(descriptor).await),
             containers: vec![],
             items: vec![],
         }
     }
 
     /// Build the live playlist container for a channel
-    fn build_live_playlist_container(&self, descriptor: &ChannelDescriptor) -> Container {
+    async fn build_live_playlist_container(&self, descriptor: &ChannelDescriptor) -> Container {
         Container {
             id: format!("radio-paradise:channel:{}:liveplaylist", descriptor.slug),
             parent_id: format!("radio-paradise:channel:{}", descriptor.slug),
@@ -383,15 +421,15 @@ impl RadioParadiseSource {
             title: format!("{} - Live Playlist", descriptor.display_name),
             class: "object.container.playlistContainer".to_string(),
             artist: None,
-            album_art: None,
+            album_art: Some(self.channel_art_url(descriptor).await),
             containers: vec![],
             items: vec![],
         }
     }
 
     /// Build a live stream item for a channel
-    fn build_live_stream_item(&self, descriptor: &ChannelDescriptor) -> Item {
-        let stream_url = self.build_live_url(descriptor.slug);
+    async fn build_live_stream_item(&self, descriptor: &ChannelDescriptor) -> Item {
+        let stream_url = self.build_live_url(&descriptor.slug);
 
         Item {
             id: format!("radio-paradise:channel:{}:live", descriptor.slug),
@@ -403,7 +441,7 @@ impl RadioParadiseSource {
             artist: Some("Radio Paradise".to_string()),
             album: Some(descriptor.display_name.to_string()),
             genre: Some("Radio".to_string()),
-            album_art: Some(self.default_cover_url()),
+            album_art: Some(self.channel_art_url(descriptor).await),
             album_art_pk: None,
             date: None,
             original_track_number: None,
@@ -422,7 +460,7 @@ impl RadioParadiseSource {
                     sample_frequency: Some("44100".to_string()),
                     nr_audio_channels: Some("2".to_string()),
                     duration: None,
-                    url: self.build_live_ogg_url(descriptor.slug),
+                    url: self.build_live_ogg_url(&descriptor.slug),
                 },
             ],
             descriptions: vec![],
@@ -430,7 +468,7 @@ impl RadioParadiseSource {
     }
 
     /// Build a history container for a channel
-    fn build_history_container(&self, descriptor: &ChannelDescriptor) -> Container {
+    async fn build_history_container(&self, descriptor: &ChannelDescriptor) -> Container {
         Container {
             id: format!("radio-paradise:channel:{}:history", descriptor.slug),
             parent_id: format!("radio-paradise:channel:{}", descriptor.slug),
@@ -441,7 +479,7 @@ impl RadioParadiseSource {
             // Expose l'historique comme une playlist jouable
             class: "object.container.playlistContainer".to_string(),
             artist: None,
-            album_art: None,
+            album_art: Some(self.channel_art_url(descriptor).await),
             containers: vec![],
             items: vec![],
         }
@@ -453,10 +491,10 @@ impl RadioParadiseSource {
         &self,
         descriptor: &ChannelDescriptor,
     ) -> Container {
-        let mut container = self.build_history_container(descriptor);
+        let mut container = self.build_history_container(descriptor).await;
 
         // Try to get actual count from playlist
-        let playlist_id = Self::history_playlist_id(descriptor.slug);
+        let playlist_id = Self::history_playlist_id(&descriptor.slug);
         let manager = pmoplaylist::PlaylistManager();
 
         if let Ok(reader) = manager.get_read_handle(&playlist_id).await {
@@ -663,11 +701,11 @@ impl MusicSource for RadioParadiseSource {
     async fn browse(&self, object_id: &str) -> Result<BrowseResult> {
         match Self::parse_object_id(object_id) {
             ObjectIdType::Root => {
-                // Return the 4 channel containers
-                let containers: Vec<Container> = ALL_CHANNELS
-                    .iter()
-                    .map(|ch| self.build_channel_container(ch))
-                    .collect();
+                // Return one container per known channel
+                let mut containers = Vec::new();
+                for ch in channels().iter() {
+                    containers.push(self.build_channel_container(ch).await);
+                }
 
                 Ok(BrowseResult::Containers(containers))
             }
@@ -678,13 +716,13 @@ impl MusicSource for RadioParadiseSource {
                     MusicSourceError::ObjectNotFound(format!("Unknown channel: {}", slug))
                 })?;
 
-                let live_item = self.build_live_stream_item(descriptor);
-                let live_playlist_container = self.build_live_playlist_container(descriptor);
+                let live_item = self.build_live_stream_item(&descriptor).await;
+                let live_playlist_container = self.build_live_playlist_container(&descriptor).await;
 
                 #[cfg(feature = "playlist")]
-                let history_container = self.build_history_container_with_count(descriptor).await;
+                let history_container = self.build_history_container_with_count(&descriptor).await;
                 #[cfg(not(feature = "playlist"))]
-                let history_container = self.build_history_container(descriptor);
+                let history_container = self.build_history_container(&descriptor).await;
 
                 Ok(BrowseResult::Mixed {
                     containers: vec![live_playlist_container, history_container],
@@ -702,7 +740,7 @@ impl MusicSource for RadioParadiseSource {
                 #[cfg(feature = "playlist")]
                 {
                     let history_container =
-                        self.build_history_container_with_count(descriptor).await;
+                        self.build_history_container_with_count(&descriptor).await;
                     let items = self.get_history_items(&slug, 0, 100).await?;
                     Ok(BrowseResult::Mixed {
                         containers: vec![history_container],
@@ -713,7 +751,7 @@ impl MusicSource for RadioParadiseSource {
                 #[cfg(not(feature = "playlist"))]
                 {
                     // If playlist feature is disabled, return just the container
-                    let history_container = self.build_history_container(descriptor);
+                    let history_container = self.build_history_container(&descriptor).await;
                     Ok(BrowseResult::Containers(vec![history_container]))
                 }
             }
@@ -723,7 +761,7 @@ impl MusicSource for RadioParadiseSource {
                 let descriptor = Self::get_channel_by_slug(&slug).ok_or_else(|| {
                     MusicSourceError::ObjectNotFound(format!("Unknown channel: {}", slug))
                 })?;
-                let item = self.build_live_stream_item(descriptor);
+                let item = self.build_live_stream_item(&descriptor).await;
                 Ok(BrowseResult::Items(vec![item]))
             }
 
@@ -735,7 +773,7 @@ impl MusicSource for RadioParadiseSource {
 
                 #[cfg(feature = "playlist")]
                 {
-                    let container = self.build_live_playlist_container(descriptor);
+                    let container = self.build_live_playlist_container(&descriptor).await;
                     let items = self.get_live_playlist_items(&slug, 0, 100).await?;
                     Ok(BrowseResult::Mixed {
                         containers: vec![container],
@@ -745,7 +783,7 @@ impl MusicSource for RadioParadiseSource {
 
                 #[cfg(not(feature = "playlist"))]
                 {
-                    let container = self.build_live_playlist_container(descriptor);
+                    let container = self.build_live_playlist_container(&descriptor).await;
                     Ok(BrowseResult::Containers(vec![container]))
                 }
             }
@@ -875,7 +913,7 @@ impl MusicSource for RadioParadiseSource {
                 let descriptor = Self::get_channel_by_slug(&slug).ok_or_else(|| {
                     MusicSourceError::ObjectNotFound(format!("Unknown channel: {}", slug))
                 })?;
-                Ok(self.build_live_stream_item(descriptor))
+                Ok(self.build_live_stream_item(&descriptor).await)
             }
 
             ObjectIdType::HistoryTrack { slug, pk } => {

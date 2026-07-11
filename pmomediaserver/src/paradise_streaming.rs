@@ -20,7 +20,7 @@ use pmoaudiocache::{AudioCacheExt, get_audio_cache, register_audio_cache};
 use pmocovers::{CoverCacheExt, get_cover_cache, register_cover_cache};
 use pmoparadise::{
     ParadiseChannelManager, ParadiseHistoryBuilder,
-    channels::{ALL_CHANNELS, ChannelDescriptor},
+    channels::{ChannelDescriptor, channels},
     stream_channel::register_global_channel_manager,
 };
 use pmoplaylist::register_audio_cache as register_playlist_audio_cache;
@@ -47,7 +47,7 @@ pub trait ParadiseStreamingExt {
     ///
     /// # Routes créées
     ///
-    /// Pour chaque canal (main, mellow, rock, eclectic) :
+    /// Pour chaque canal connu du registre (main, mellow, rock, eclectic, beyond, ...) :
     /// - `/radioparadise/stream/{slug}/flac` - Stream FLAC live
     /// - `/radioparadise/stream/{slug}/ogg` - Stream OGG live
     /// - `/radioparadise/stream/{slug}/historic/{client_id}/flac` - Historique FLAC
@@ -157,10 +157,10 @@ impl ParadiseStreamingExt for pmoserver::Server {
             manager: manager.clone(),
         });
 
-        // Ajouter les routes pour chaque canal
+        // Ajouter les routes pour chaque canal (registre rafraîchi par le manager)
         info!("🌐 Registering streaming routes...");
-        for descriptor in ALL_CHANNELS.iter() {
-            let slug = descriptor.slug;
+        for descriptor in channels().iter() {
+            let slug = descriptor.slug.as_str();
             let channel_id = descriptor.id;
 
             // Route FLAC live
@@ -243,7 +243,7 @@ impl ParadiseStreamingExt for pmoserver::Server {
 
 async fn stream_flac(
     manager: Arc<ParadiseChannelManager>,
-    channel_id: u8,
+    channel_id: u16,
 ) -> Result<Response, StatusCode> {
     let channel = manager.get(channel_id).ok_or(StatusCode::NOT_FOUND)?;
     let stream = channel.subscribe_flac();
@@ -259,7 +259,7 @@ async fn stream_flac(
 
 async fn stream_ogg(
     manager: Arc<ParadiseChannelManager>,
-    channel_id: u8,
+    channel_id: u16,
 ) -> Result<Response, StatusCode> {
     let channel = manager.get(channel_id).ok_or(StatusCode::NOT_FOUND)?;
     let stream = channel.subscribe_ogg();
@@ -275,7 +275,7 @@ async fn stream_ogg(
 
 async fn get_metadata(
     manager: Arc<ParadiseChannelManager>,
-    channel_id: u8,
+    channel_id: u16,
 ) -> Result<impl IntoResponse, StatusCode> {
     let channel = manager.get(channel_id).ok_or(StatusCode::NOT_FOUND)?;
     let metadata = channel.metadata().await;
@@ -284,7 +284,7 @@ async fn get_metadata(
 
 async fn stream_history_flac(
     manager: Arc<ParadiseChannelManager>,
-    channel_id: u8,
+    channel_id: u16,
     client_id: String,
 ) -> Result<Response, StatusCode> {
     let channel = manager.get(channel_id).ok_or(StatusCode::NOT_FOUND)?;
@@ -307,7 +307,7 @@ async fn stream_history_flac(
 
 async fn stream_history_ogg(
     manager: Arc<ParadiseChannelManager>,
-    channel_id: u8,
+    channel_id: u16,
     client_id: String,
 ) -> Result<Response, StatusCode> {
     let channel = manager.get(channel_id).ok_or(StatusCode::NOT_FOUND)?;
@@ -347,10 +347,8 @@ fn spawn_playlist_event_handler(manager: Arc<ParadiseChannelManager>) {
     });
 }
 
-fn channel_from_live_playlist(playlist_id: &str) -> Option<&'static ChannelDescriptor> {
+fn channel_from_live_playlist(playlist_id: &str) -> Option<ChannelDescriptor> {
     const PREFIX: &str = "radio-paradise-live-";
     let slug = playlist_id.strip_prefix(PREFIX)?;
-    ALL_CHANNELS
-        .iter()
-        .find(|descriptor| descriptor.slug == slug)
+    pmoparadise::channels::channel_by_slug(slug)
 }

@@ -29,7 +29,7 @@ pub const DEFAULT_BLOCK_TIMEOUT_SECS: u64 = 7200; // 2 hours
 pub const DEFAULT_USER_AGENT: &str = "pmoparadise/0.1.0";
 
 /// Default channel (0 = main mix)
-pub const DEFAULT_CHANNEL: u8 = 0;
+pub const DEFAULT_CHANNEL: u16 = 0;
 
 /// Radio Paradise HTTP client
 ///
@@ -55,7 +55,7 @@ pub const DEFAULT_CHANNEL: u8 = 0;
 pub struct RadioParadiseClient {
     pub(crate) client: Client,
     api_base: String,
-    channel: u8,
+    channel: u16,
     pub(crate) request_timeout: Duration,
     pub(crate) block_timeout: Duration,
     next_block_url: Option<String>,
@@ -92,7 +92,7 @@ impl RadioParadiseClient {
     }
 
     /// Get the current channel (0 = main mix)
-    pub fn channel(&self) -> u8 {
+    pub fn channel(&self) -> u16 {
         self.channel
     }
 
@@ -102,7 +102,7 @@ impl RadioParadiseClient {
     }
 
     /// Clone the client with a different channel while preserving other settings.
-    pub fn clone_with_channel(&self, channel: u8) -> Self {
+    pub fn clone_with_channel(&self, channel: u16) -> Self {
         let mut cloned = self.clone();
         cloned.channel = channel;
         cloned.next_block_url = None;
@@ -234,6 +234,36 @@ impl RadioParadiseClient {
     pub fn http_client(&self) -> &Client {
         &self.client
     }
+
+    /// List the channels currently advertised by the Radio Paradise API
+    ///
+    /// Only block-based channels (playable by this crate) are returned.
+    /// Use `channels::refresh_channels()` to update the global registry.
+    pub async fn list_channels(&self) -> Result<Vec<crate::channels::ChannelDescriptor>> {
+        let url = Url::parse(&format!("{}/list_chan", self.api_base))?;
+
+        debug!("Fetching channel list: {}", url);
+
+        let response = self
+            .client
+            .get(url)
+            .timeout(self.request_timeout)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            return Err(Error::other(format!(
+                "API returned error status: {}",
+                response.status()
+            )));
+        }
+
+        let raw: Vec<crate::channels::ApiChannel> = response.json().await?;
+        Ok(raw
+            .into_iter()
+            .filter_map(|ch| ch.into_descriptor())
+            .collect())
+    }
 }
 
 /// Builder for configuring a RadioParadiseClient
@@ -241,7 +271,7 @@ impl RadioParadiseClient {
 pub struct ClientBuilder {
     client: Option<Client>,
     api_base: String,
-    channel: u8,
+    channel: u16,
     request_timeout: Duration,
     block_timeout: Duration,
     user_agent: String,
@@ -280,8 +310,8 @@ impl ClientBuilder {
         self
     }
 
-    /// Set the channel (0 = main mix, 1 = mellow, 2 = rock, 3 = world/etc)
-    pub fn channel(mut self, channel: u8) -> Self {
+    /// Set the channel (see `channels::channels()` for the available IDs)
+    pub fn channel(mut self, channel: u16) -> Self {
         self.channel = channel;
         self
     }
